@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "MUWOYOTRANSLATE",
+    "slug": "MUWOYOTRANSLATE",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "scheme": "muwoyotranslate",
+    "icon": "./assets/muwoyo-brand.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#080B10",
+        "foregroundImage": "./assets/muwoyo-brand.png",
+        "monochromeImage": "./assets/muwoyo-brand.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-router",
+      "expo-web-browser"
+    ]
+  }
+}

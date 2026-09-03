@@ -1,0 +1,19 @@
+project_id = "nrrunmlawjvbpoywjufr"
+
+[functions.translate]
+verify_jwt = true
+
+[functions.connect-create-session]
+verify_jwt = true
+
+[functions.connect-join-session]
+verify_jwt = true
+
+[functions.connect-livekit-token]
+verify_jwt = true
+
+[functions.connect-session-details]
+verify_jwt = true
+
+[functions.connect-update-status]
+verify_jwt = true

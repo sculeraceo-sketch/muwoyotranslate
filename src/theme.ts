@@ -1,0 +1,66 @@
+export const theme = {
+  colors: {
+    background: '#F4F8F6',
+    surface: '#FFFFFF',
+    elevated: '#EAF2ED',
+    primaryText: '#14231C',
+    secondaryText: '#617269',
+    border: '#D7E4DC',
+    emerald: '#10B981',
+    emeraldDark: '#059669',
+    emeraldDeep: '#047857',
+    indigo: '#4F46E5',
+    indigoDeep: '#3730A3',
+    success: '#10B981',
+    warning: '#F59E0B',
+    error: '#EF4444',
+    info: '#3B82F6',
+    white: '#FFFFFF',
+    card: '#FFFFFF',
+    muted: '#829189',
+  },
+  spacing: {
+    xs: 8,
+    sm: 12,
+    md: 16,
+    lg: 20,
+    xl: 24,
+    xxl: 32,
+  },
+  radii: {
+    sm: 10,
+    md: 16,
+    lg: 20,
+    xl: 28,
+    full: 999,
+  },
+  typography: {
+    display: 32,
+    large: 26,
+    heading: 22,
+    body: 16,
+    secondary: 14,
+    caption: 12,
+  },
+  shadow: {
+    card: {
+      shadowColor: '#000000',
+      shadowOpacity: 0.12,
+      shadowRadius: 14,
+      shadowOffset: { width: 0, height: 8 },
+      elevation: 6,
+    },
+  },
+  animation: {
+    fast: 180,
+    medium: 260,
+    slow: 400,
+  },
+};
+
+export const appTokens = {
+  screenPadding: 20,
+  buttonHeight: 52,
+  tabHeight: 82,
+  cardBorder: 1,
+};
