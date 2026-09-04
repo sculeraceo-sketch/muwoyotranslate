@@ -10,7 +10,10 @@ export type LanguageCode =
   | 'ko'
   | 'ar'
   | 'hi'
-  | 'ru';
+  | 'ru'
+  | 'nl' | 'tr' | 'pl' | 'uk' | 'vi' | 'id' | 'th' | 'sv' | 'no' | 'da'
+  | 'fi' | 'cs' | 'el' | 'he' | 'ro' | 'hu' | 'sw' | 'fa' | 'bn' | 'ta'
+  | 'ms' | 'fil' | 'ur' | 'am';
 
 export interface UserProfile {
   id: string;

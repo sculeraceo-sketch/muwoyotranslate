@@ -1,18 +1,26 @@
 import React from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet, SafeAreaView, TextInput, Image, Modal } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { View, Text, Pressable, ScrollView, StyleSheet, TextInput, Image, Modal, Share } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Clipboard from 'expo-clipboard';
+import { setAudioModeAsync } from 'expo-audio';
+import * as Speech from 'expo-speech';
 import QRCode from 'react-native-qrcode-svg';
-import { Ionicons } from '@expo/vector-icons';
+import { FontAwesome5, Ionicons } from '@expo/vector-icons';
 import { useAppStore } from './store';
 import { theme } from './theme';
 import { supportedLanguages, plans } from './catalog';
 import { countries, CountryOption } from './countries';
 import { supabase } from './supabase';
-import { translationService } from './services/translation';
+import { useOfflineSpeechRecognition } from './services/offlineSpeechRecognition';
+import { offlineTranslationService } from './services/offlineTranslation';
 import { connectService } from './services/connect';
+import { liveKitService, LiveKitStatus } from './services/livekit';
+import { realtimeSessionService } from './services/realtime';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -40,11 +48,11 @@ export function SecondaryButton({ title, onPress, style }: { title: string; onPr
   );
 }
 
-function AuthButton({ icon, title, onPress, dark = false }: { icon: React.ComponentProps<typeof Ionicons>['name']; title: string; onPress: () => void; dark?: boolean }) {
+function AuthButton({ icon, brand, title, onPress, variant = 'default' }: { icon?: React.ComponentProps<typeof Ionicons>['name']; brand?: 'google' | 'apple'; title: string; onPress: () => void; variant?: 'default' | 'apple' | 'email' }) {
   return (
-    <Pressable onPress={onPress} style={[styles.authButton, dark && styles.authButtonDark]}>
-      <Ionicons name={icon} size={21} color={dark ? '#111111' : icon === 'logo-google' ? '#4285F4' : theme.colors.primaryText} />
-      <Text style={[styles.authButtonText, dark && styles.authButtonTextDark]}>{title}</Text>
+    <Pressable onPress={onPress} style={[styles.authButton, variant === 'apple' && styles.authButtonApple, variant === 'email' && styles.authButtonEmail]}>
+      {brand ? <FontAwesome5 name={brand} size={19} color={brand === 'google' ? '#4285F4' : theme.colors.white} /> : icon ? <Ionicons name={icon} size={21} color={variant === 'email' ? theme.colors.white : theme.colors.primaryText} /> : null}
+      <Text style={[styles.authButtonText, variant !== 'default' && styles.authButtonTextLight]}>{title}</Text>
     </Pressable>
   );
 }
@@ -54,7 +62,11 @@ function BrandMark({ size = 34 }: { size?: number }) {
 }
 
 function languageFlag(language: string) {
-  return supportedLanguages.find((item) => item.label === language)?.flag ?? '🌐';
+  return supportedLanguages.find((item) => item.label === language)?.flag ?? '🏳️';
+}
+
+function languageCode(language: string) {
+  return supportedLanguages.find((item) => item.label === language)?.code ?? 'en';
 }
 
 export function TopBar({ title, rightAction }: { title: string; rightAction?: React.ReactNode }) {
@@ -76,8 +88,13 @@ export function TopBar({ title, rightAction }: { title: string; rightAction?: Re
 export function SplashScreen() {
   const router = useRouter();
   React.useEffect(() => {
-    const timer = setTimeout(() => router.replace('/onboarding'), 1400);
-    return () => clearTimeout(timer);
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void AsyncStorage.getItem('muwoyo.onboardingComplete').then((value) => {
+        if (!cancelled) router.replace('/(tabs)/translate');
+      });
+    }, 2600);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [router]);
 
   return (
@@ -93,6 +110,7 @@ export function SplashScreen() {
 
 export function OnboardingScreen() {
   const router = useRouter();
+  const setOnboardingComplete = useAppStore((state) => state.setOnboardingComplete);
   const slides = [
     { title: 'Speak. Translate. Understand.', description: 'Break language barriers with fast and natural translation.' },
     { title: 'Have conversations in any language.', description: 'Connect two people and translate the conversation in real time.' },
@@ -117,7 +135,7 @@ export function OnboardingScreen() {
         {index < slides.length - 1 ? (
           <PrimaryButton title="Next" fullWidth onPress={() => setIndex((v) => v + 1)} />
         ) : (
-          <PrimaryButton title="Get Started" fullWidth onPress={() => router.push('/welcome')} />
+          <PrimaryButton title="Get Started" fullWidth onPress={() => { setOnboardingComplete(true); router.replace('/welcome'); }} />
         )}
         <SecondaryButton title="Already have an account? Sign In" onPress={() => router.push('/welcome')} />
       </View>
@@ -177,17 +195,20 @@ export function WelcomeScreen() {
   return (
     <ScreenShell>
       <View style={styles.authLanguageRow}><Text style={styles.authLanguageLabel}>{appLanguage === 'pt' ? 'Idioma do app' : 'App language'}</Text><Pressable style={styles.languageSwitch} onPress={() => setAppLanguage((value) => value === 'pt' ? 'en' : 'pt')}><Text style={styles.languageSwitchText}>{appLanguage.toUpperCase()}</Text><Ionicons name="language-outline" size={18} color={theme.colors.emeraldDark} /></Pressable></View>
-      <View style={styles.heroBlock}>
-        <Text style={styles.title}>{appLanguage === 'pt' ? 'Bem-vindo' : 'Welcome'}</Text>
+      <View style={styles.loginHero}>
+        <View style={styles.loginBrandBadge}><BrandMark size={68} /></View>
+        <Text style={styles.loginEyebrow}>MUWOYO TRANSLATE</Text>
+        <Text style={styles.loginTitle}>{appLanguage === 'pt' ? 'A sua voz, em qualquer idioma.' : 'Your voice, in every language.'}</Text>
         <Text style={styles.subtitle}>{appLanguage === 'pt' ? 'Entre na sua próxima conversa multilíngue.' : 'Continue to your next multilingual conversation.'}</Text>
       </View>
-      <View style={styles.buttonStack}>
-        <AuthButton icon="logo-google" title={isLoading ? 'A conectar...' : 'Continuar com Google'} onPress={() => continueWithProvider('google')} />
-        <AuthButton icon="logo-apple" title="Continuar com Apple" onPress={() => continueWithProvider('apple')} dark />
+      <View style={styles.loginForm}>
+        <AuthButton brand="google" title={isLoading ? 'A conectar...' : 'Continuar com Google'} onPress={() => continueWithProvider('google')} />
+        <AuthButton brand="apple" title="Continuar com Apple" onPress={() => continueWithProvider('apple')} variant="apple" />
+        <View style={styles.authDivider}><View style={styles.authDividerLine} /><Text style={styles.authDividerText}>ou use o seu e-mail</Text><View style={styles.authDividerLine} /></View>
         <TextInput value={email} onChangeText={setEmail} placeholder="E-mail" placeholderTextColor={theme.colors.secondaryText} autoCapitalize="none" keyboardType="email-address" style={styles.authInput} />
         <TextInput value={password} onChangeText={setPassword} placeholder="Palavra-passe" placeholderTextColor={theme.colors.secondaryText} secureTextEntry style={styles.authInput} />
-        <AuthButton icon="log-in-outline" title="Entrar com e-mail" onPress={() => continueWithEmail()} />
-        <SecondaryButton title="Criar conta" onPress={() => router.push('/create-account')} />
+        <AuthButton icon="arrow-forward" title="Entrar com e-mail" onPress={() => continueWithEmail()} variant="email" />
+        <Pressable style={styles.createAccountLink} onPress={() => router.push('/create-account')}><Text style={styles.createAccountText}>Ainda não tem conta? <Text style={styles.createAccountAccent}>Criar conta</Text></Text></Pressable>
         {authError ? <Text style={styles.authError}>{authError}</Text> : null}
       </View>
     </ScreenShell>
@@ -196,7 +217,7 @@ export function WelcomeScreen() {
 
 export function TranslateHomeScreen() {
   const router = useRouter();
-  const { user, sourceLanguage, targetLanguage, autoDetect, detectedLanguage, swapLanguages, balances } = useAppStore();
+  const { user, sourceLanguage, targetLanguage, autoDetect, detectedLanguage, swapLanguages } = useAppStore();
 
   return (
     <ScreenShell>
@@ -204,17 +225,12 @@ export function TranslateHomeScreen() {
         <View style={styles.headerIdentity}>
           <BrandMark size={76} />
           <View>
-            <Text style={styles.greeting}>Good afternoon</Text>
+            <Text style={styles.greeting}>Welcome back,</Text>
             <Text style={styles.name}>{user.name}</Text>
           </View>
         </View>
         <View style={styles.avatar}><Text style={styles.avatarLetter}>{user.avatar}</Text></View>
       </View>
-      <View style={styles.minuteBanner}>
-        <Text style={styles.minuteLabel}>{balances.translationRemaining} Translation min</Text>
-        <Pressable style={styles.plusButton} onPress={() => router.push('/subscription')}><Ionicons name="add" size={18} color={theme.colors.primaryText} /></Pressable>
-      </View>
-
       <View style={styles.langSelectorCard}>
         <Pressable onPress={() => router.push('/language-selector?field=source')} style={styles.languagePill}>
           <Text style={styles.languageValue}>{autoDetect ? '🌐 Auto Detect' : `${languageFlag(sourceLanguage)} ${sourceLanguage}`}</Text>
@@ -225,18 +241,11 @@ export function TranslateHomeScreen() {
         </Pressable>
       </View>
 
-      <View style={styles.voiceDirections}>
-        <Pressable onPress={() => router.push({ pathname: '/text-translation', params: { source: sourceLanguage, target: targetLanguage, voice: 'true' } })} style={styles.voiceDirection}>
-          <Ionicons name="mic" size={34} color={theme.colors.white} />
-          <Text style={styles.voiceDirectionLabel}>{languageFlag(sourceLanguage)} {sourceLanguage}</Text>
-          <Text style={styles.voiceDirectionHint}>Falar para {targetLanguage}</Text>
-        </Pressable>
-        <Pressable onPress={() => router.push({ pathname: '/text-translation', params: { source: targetLanguage, target: sourceLanguage, voice: 'true' } })} style={[styles.voiceDirection, styles.voiceDirectionSecondary]}>
-          <Ionicons name="mic" size={34} color={theme.colors.emeraldDark} />
-          <Text style={styles.voiceDirectionLabel}>{languageFlag(targetLanguage)} {targetLanguage}</Text>
-          <Text style={styles.voiceDirectionHint}>Falar para {sourceLanguage}</Text>
-        </Pressable>
-      </View>
+      <Pressable onPress={() => router.push({ pathname: '/text-translation', params: { source: sourceLanguage, target: targetLanguage, voice: 'true' } })} style={styles.singleVoiceDirection}>
+        <Ionicons name="mic" size={38} color={theme.colors.white} />
+        <Text style={styles.voiceDirectionLabel}>Voice Translate</Text>
+        <Text style={styles.voiceDirectionHint}>{languageFlag(sourceLanguage)} {sourceLanguage} ↔ {languageFlag(targetLanguage)} {targetLanguage}</Text>
+      </Pressable>
       <Text style={styles.tapText}>Escolha um microfone</Text>
       <Text style={styles.helperText}>{sourceLanguage} → {targetLanguage}</Text>
       <View style={styles.rowBetween}><SecondaryButton title="Type instead" onPress={() => router.push('/text-translation')} style={{ flex: 1 }} /></View>
@@ -297,13 +306,13 @@ export function CreateAccountScreen() {
         <Text style={styles.title}>Your languages</Text>
         <Text style={styles.subtitle}>Choose the language you use and the one you translate most often.</Text>
         <Text style={styles.fieldLabel}>Main language</Text>
-        <ScrollView style={styles.languageChoiceList}>{countries.map((item) => <Pressable key={item.code} style={[styles.languageChoice, primaryLanguage === item.name && styles.languageChoiceActive]} onPress={() => setPrimaryLanguage(item.name)}><Text style={styles.languageFlag}>{item.flag}</Text><Text style={styles.languageRowText}>{item.name}</Text><Text style={styles.languageNative}>Primary language</Text></Pressable>)}</ScrollView>
+        <ScrollView style={styles.languageChoiceList}>{supportedLanguages.map((item) => <Pressable key={item.code} style={[styles.languageChoice, primaryLanguage === item.label && styles.languageChoiceActive]} onPress={() => setPrimaryLanguage(item.label)}><Text style={styles.languageFlag}>{item.flag}</Text><Text style={styles.languageRowText}>{item.label}</Text><Text style={styles.languageNative}>{item.nativeLabel}</Text></Pressable>)}</ScrollView>
         <PrimaryButton title="Continue" fullWidth onPress={() => { if (!primaryLanguage) setMessage('Choose your main language.'); else { setMessage(''); setStep(3); } }} />
         <SecondaryButton title="Back" onPress={() => setStep(1)} />
       </View> : <View style={styles.authForm}>
         <Text style={styles.title}>Preferred translation language</Text>
         <Text style={styles.subtitle}>Choose the default language for your translations.</Text>
-        <ScrollView style={styles.languageChoiceList}>{countries.map((item) => <Pressable key={item.code} style={[styles.languageChoice, translationLanguage === item.name && styles.languageChoiceActive]} onPress={() => setTranslationLanguage(item.name)}><Text style={styles.languageFlag}>{item.flag}</Text><Text style={styles.languageRowText}>{item.name}</Text><Text style={styles.languageNative}>Translation language</Text></Pressable>)}</ScrollView>
+        <ScrollView style={styles.languageChoiceList}>{supportedLanguages.map((item) => <Pressable key={item.code} style={[styles.languageChoice, translationLanguage === item.label && styles.languageChoiceActive]} onPress={() => setTranslationLanguage(item.label)}><Text style={styles.languageFlag}>{item.flag}</Text><Text style={styles.languageRowText}>{item.label}</Text><Text style={styles.languageNative}>{item.nativeLabel}</Text></Pressable>)}</ScrollView>
         <PrimaryButton title={isLoading ? 'Creating...' : 'Create account'} fullWidth onPress={createAccount} />
         <SecondaryButton title="Back" onPress={() => setStep(2)} />
       </View>}
@@ -333,6 +342,8 @@ export function LanguageSelectorScreen() {
   const params = useLocalSearchParams<{ field?: string }>();
   const { setSourceLanguage, setTargetLanguage, swapLanguages, setAutoDetect } = useAppStore();
   const field = Array.isArray(params.field) ? params.field[0] : params.field ?? 'source';
+  const [query, setQuery] = React.useState('');
+  const filteredLanguages = supportedLanguages.filter((language) => `${language.label} ${language.nativeLabel}`.toLowerCase().includes(query.toLowerCase()));
 
   const handleSelectLanguage = (langLabel: string) => {
     if (field === 'source') {
@@ -349,10 +360,10 @@ export function LanguageSelectorScreen() {
   return (
     <ScreenShell>
       <TopBar title="Language" />
-      <View style={styles.searchBox}><Ionicons name="search" size={18} color={theme.colors.secondaryText} /><Text style={styles.searchText}>Search languages</Text></View>
+      <View style={styles.searchBox}><Ionicons name="search" size={18} color={theme.colors.secondaryText} /><TextInput value={query} onChangeText={setQuery} placeholder="Search languages" placeholderTextColor={theme.colors.secondaryText} style={styles.searchInput} /></View>
       <ScrollView style={{ marginTop: 16 }}>
         <Text style={styles.sectionTitle}>Popular</Text>
-        {supportedLanguages.filter((lang) => lang.popular).map((lang) => (
+        {filteredLanguages.filter((lang) => !query && lang.popular || query).map((lang) => (
           <Pressable
             key={lang.code}
             style={styles.languageRow}
@@ -363,7 +374,7 @@ export function LanguageSelectorScreen() {
             <Text style={styles.languageNative}>{lang.nativeLabel}</Text>
           </Pressable>
         ))}
-        <SecondaryButton title="Auto Detect" onPress={() => { setAutoDetect(true); router.back(); }} style={{ marginTop: 20 }} />
+        {field === 'source' ? <SecondaryButton title="Auto Detect" onPress={() => { setAutoDetect(true); router.back(); }} style={{ marginTop: 20 }} /> : null}
       </ScrollView>
     </ScreenShell>
   );
@@ -375,20 +386,40 @@ export function TextTranslationScreen() {
   const storeLanguages = useAppStore((state) => ({ sourceLanguage: state.sourceLanguage, targetLanguage: state.targetLanguage }));
   const sourceLanguage = (Array.isArray(params.source) ? params.source[0] : params.source) ?? storeLanguages.sourceLanguage;
   const targetLanguage = (Array.isArray(params.target) ? params.target[0] : params.target) ?? storeLanguages.targetLanguage;
+  const voiceMode = params.voice === 'true';
   const [value, setValue] = React.useState('');
   const [isTranslating, setIsTranslating] = React.useState(false);
   const [error, setError] = React.useState('');
   const [translatedText, setTranslatedText] = React.useState('');
+  const [isFavorite, setIsFavorite] = React.useState(false);
   const [languageField, setLanguageField] = React.useState<'source' | 'target' | null>(null);
+  const translationRequestRef = React.useRef(0);
+  const [voiceStatus, setVoiceStatus] = React.useState<'idle' | 'listening' | 'processing' | 'playing'>('idle');
+  const offlineSpeech = useOfflineSpeechRecognition(sourceLanguage);
+
+  React.useEffect(() => {
+    void setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+    return () => {
+      void Speech.stop();
+    };
+  }, []);
 
   const handleTranslate = async () => {
     const original = value.trim();
     if (!original) return;
+    const requestId = ++translationRequestRef.current;
     setError('');
     setIsTranslating(true);
     try {
-      const result = await translationService.translateText({ text: original, sourceLanguage, targetLanguage, autoDetect: false });
+      const installed = await offlineTranslationService.isLanguagePairInstalled(languageCode(sourceLanguage), languageCode(targetLanguage));
+      if (!installed) {
+        setError('Download language support to translate offline.');
+        return;
+      }
+      const result = await offlineTranslationService.translateOffline(original, languageCode(sourceLanguage), languageCode(targetLanguage));
+      if (requestId !== translationRequestRef.current) return;
       setTranslatedText(result.translatedText);
+      await useAppStore.getState().saveTranslation({ sourceLanguage, targetLanguage, originalText: original, translatedText: result.translatedText, mode: 'translation' });
     } catch (translationError) {
       setError(translationError instanceof Error ? translationError.message : 'A tradução falhou. Tente novamente.');
     } finally {
@@ -396,15 +427,64 @@ export function TextTranslationScreen() {
     }
   };
 
+  const downloadOfflineLanguages = async () => {
+    setError('A preparar os idiomas offline...');
+    try {
+      await offlineTranslationService.downloadLanguagePack(languageCode(sourceLanguage), languageCode(targetLanguage));
+      setError('Idiomas offline prontos.');
+      void handleTranslate();
+    } catch (downloadError) {
+      setError(downloadError instanceof Error ? downloadError.message : 'Não foi possível preparar os idiomas offline.');
+    }
+  };
+
+  React.useEffect(() => {
+    if (voiceMode || !value.trim()) return;
+    const timer = setTimeout(() => { void handleTranslate(); }, 650);
+    return () => clearTimeout(timer);
+  }, [value, sourceLanguage, targetLanguage, voiceMode]);
+
+  const handleVoice = async () => {
+    setError('');
+    try {
+      if (offlineSpeech.status === 'listening') {
+        offlineSpeech.stop();
+        setIsTranslating(true);
+        setVoiceStatus('processing');
+        const transcriptionText = offlineSpeech.transcript;
+        if (!transcriptionText) throw new Error('Nenhuma fala foi reconhecida offline.');
+        const detectedCode = offlineSpeech.detectedLanguage ?? languageCode(sourceLanguage);
+        const sourceCode = detectedCode === languageCode(targetLanguage) ? languageCode(targetLanguage) : languageCode(sourceLanguage);
+        const targetCode = sourceCode === languageCode(sourceLanguage) ? languageCode(targetLanguage) : languageCode(sourceLanguage);
+        const result = await offlineTranslationService.translateOffline(transcriptionText, sourceCode, targetCode);
+        setValue(transcriptionText);
+        setTranslatedText(result.translatedText);
+        setVoiceStatus('playing');
+        await Speech.speak(result.translatedText, { language: targetCode });
+        await useAppStore.getState().saveTranslation({ sourceLanguage, targetLanguage, originalText: transcriptionText, translatedText: result.translatedText, mode: 'translation' });
+        setIsTranslating(false);
+        setVoiceStatus('idle');
+      } else {
+        await offlineSpeech.start();
+        setVoiceStatus('listening');
+      }
+    } catch (requestError) {
+      setIsTranslating(false);
+      setVoiceStatus('idle');
+      setError(requestError instanceof Error ? requestError.message : 'Não foi possível traduzir a voz.');
+    }
+  };
+
   return (
     <ScreenShell>
       <TopBar title="Translate" />
       <View style={styles.textLanguageRow}><Pressable onPress={() => setLanguageField('source')} style={styles.textLanguageSelector}><Text style={styles.languageValue}>{languageFlag(sourceLanguage)} {sourceLanguage}</Text></Pressable><Ionicons name="arrow-forward" size={20} color={theme.colors.muted} /><Pressable onPress={() => setLanguageField('target')} style={styles.textLanguageSelector}><Text style={styles.languageValue}>{languageFlag(targetLanguage)} {targetLanguage}</Text></Pressable></View>
-      <View style={styles.translationInputCard}><Text style={styles.resultLabel}>Texto original</Text><TextInput multiline value={value} onChangeText={setValue} placeholder="Escreva algo para traduzir..." placeholderTextColor={theme.colors.secondaryText} style={styles.textInput} /><Pressable onPress={() => setValue('')} style={styles.clearInput}><Ionicons name="close-circle" size={22} color={theme.colors.muted} /></Pressable></View>
+      <View style={styles.translationInputCard}><Text style={styles.resultLabel}>{voiceMode ? `Fale em ${sourceLanguage}` : 'Texto original'}</Text><TextInput multiline editable={!voiceMode || offlineSpeech.status !== 'listening'} value={value} onChangeText={setValue} placeholder="Escreva algo para traduzir..." placeholderTextColor={theme.colors.secondaryText} style={styles.textInput} /><Pressable onPress={() => setValue('')} style={styles.clearInput}><Ionicons name="close-circle" size={22} color={theme.colors.muted} /></Pressable></View>
       <View style={styles.translationOutputCard}><Text style={styles.resultLabel}>Tradução</Text><Text style={styles.translationOutput}>{isTranslating ? 'A traduzir...' : translatedText || 'O resultado aparecerá aqui.'}</Text></View>
-      <View style={styles.textActions}><Pressable style={styles.verticalAction}><Ionicons name="volume-high-outline" size={21} color={theme.colors.primaryText} /><Text style={styles.actionLabel}>Ouvir áudio</Text></Pressable><Pressable style={styles.verticalAction}><Ionicons name="copy-outline" size={21} color={theme.colors.primaryText} /><Text style={styles.actionLabel}>Copiar</Text></Pressable><Pressable style={styles.verticalAction}><Ionicons name="share-social-outline" size={21} color={theme.colors.primaryText} /><Text style={styles.actionLabel}>Partilhar</Text></Pressable><Pressable style={styles.verticalAction} onPress={() => { if (translatedText) void useAppStore.getState().saveTranslation({ sourceLanguage, targetLanguage, originalText: value, translatedText, mode: 'translation' }); }}><Ionicons name="heart-outline" size={21} color={theme.colors.primaryText} /><Text style={styles.actionLabel}>Favoritos</Text></Pressable></View>
-      <PrimaryButton title={isTranslating ? 'A traduzir...' : 'Traduzir'} fullWidth onPress={handleTranslate} />
-      {error ? <Text style={styles.authError}>{error}</Text> : null}
+      <View style={styles.textActions}><Pressable style={styles.verticalAction} onPress={() => { if (translatedText) void Speech.speak(translatedText, { language: languageCode(targetLanguage) }); }}><Ionicons name="volume-high-outline" size={21} color={theme.colors.primaryText} /><Text style={styles.actionLabel}>Ouvir áudio</Text></Pressable><Pressable style={styles.verticalAction} onPress={() => { if (translatedText) void Clipboard.setStringAsync(translatedText); }}><Ionicons name="copy-outline" size={21} color={theme.colors.primaryText} /><Text style={styles.actionLabel}>Copiar</Text></Pressable><Pressable style={styles.verticalAction} onPress={() => { if (translatedText) void Share.share({ message: translatedText }); }}><Ionicons name="share-social-outline" size={21} color={theme.colors.primaryText} /><Text style={styles.actionLabel}>Partilhar</Text></Pressable><Pressable style={styles.verticalAction} onPress={() => { if (translatedText) { setIsFavorite(true); void useAppStore.getState().saveTranslation({ sourceLanguage, targetLanguage, originalText: value, translatedText, mode: 'translation' }); } }}><Ionicons name={isFavorite ? 'heart' : 'heart-outline'} size={21} color={isFavorite ? theme.colors.error : theme.colors.primaryText} /><Text style={styles.actionLabel}>Favoritos</Text></Pressable></View>
+      {voiceMode ? <><View style={styles.voiceState}><Text style={styles.voiceStateText}>{voiceStatus === 'listening' ? 'Listening...' : voiceStatus === 'processing' ? 'Transcribing offline...' : voiceStatus === 'playing' ? 'Playing translation...' : 'Tap to speak'}</Text>{voiceStatus === 'listening' ? <View style={styles.waveform}>{[12, 24, 36, 20, 30, 16, 28].map((height, index) => <View key={index} style={[styles.waveBar, { height }]} />)}</View> : null}</View><PrimaryButton title={offlineSpeech.status === 'listening' ? 'Parar e traduzir' : 'Gravar voz offline'} fullWidth onPress={() => void handleVoice()} /></> : <PrimaryButton title={isTranslating ? 'A traduzir...' : 'Traduzir'} fullWidth onPress={handleTranslate} />}
+      {!voiceMode && error === 'Download language support to translate offline.' ? <SecondaryButton title="Download language support" onPress={() => void downloadOfflineLanguages()} style={styles.fullWidth} /> : null}
+      {error || offlineSpeech.error ? <Text style={styles.authError}>{error || offlineSpeech.error}</Text> : null}
       <Modal visible={languageField !== null} animationType="slide" transparent onRequestClose={() => setLanguageField(null)}><View style={styles.modalBackdrop}><View style={styles.countryModal}><Text style={styles.title}>Escolher idioma</Text><ScrollView>{supportedLanguages.map((language) => <Pressable key={language.code} style={styles.countryOption} onPress={() => { if (languageField === 'source') useAppStore.getState().setSourceLanguage(language.label); else useAppStore.getState().setTargetLanguage(language.label); setLanguageField(null); }}><Text style={styles.languageFlag}>{language.flag}</Text><Text style={styles.languageRowText}>{language.label}</Text></Pressable>)}</ScrollView><SecondaryButton title="Cancelar" onPress={() => setLanguageField(null)} /></View></View></Modal>
     </ScreenShell>
   );
@@ -414,8 +494,8 @@ export function TranslationResultScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ original?: string; translated?: string }>();
   const { sourceLanguage, targetLanguage, saveTranslation } = useAppStore();
-  const original = Array.isArray(params.original) ? params.original[0] : params.original ?? 'How much does this cost?';
-  const translated = Array.isArray(params.translated) ? params.translated[0] : params.translated ?? 'Quanto custa isto?';
+  const original = Array.isArray(params.original) ? params.original[0] : params.original ?? '';
+  const translated = Array.isArray(params.translated) ? params.translated[0] : params.translated ?? '';
   const handleDone = async () => {
     await saveTranslation({ sourceLanguage, targetLanguage, originalText: original, translatedText: translated, mode: 'translation' });
     router.push('/(tabs)/translate');
@@ -444,7 +524,7 @@ export function TranslationResultScreen() {
 
 export function ConnectSetupScreen() {
   const router = useRouter();
-  const { sourceLanguage, targetLanguage } = useAppStore();
+  const { sourceLanguage, targetLanguage, isAuthenticated, authReady } = useAppStore();
   const [mode, setMode] = React.useState<'choose' | 'host' | 'join'>('choose');
   const [pairingCode, setPairingCode] = React.useState('');
   const [invite, setInvite] = React.useState<{ sessionId: string; qrPayload: string; pairingCode: string; expiresAt: string } | null>(null);
@@ -453,6 +533,12 @@ export function ConnectSetupScreen() {
   const [scannerOpen, setScannerOpen] = React.useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [sessionStatus, setSessionStatus] = React.useState<'waiting' | 'paired' | 'ready' | 'inviting' | 'active' | 'ended'>('waiting');
+
+  React.useEffect(() => {
+    if (authReady && !isAuthenticated) router.replace('/welcome');
+  }, [authReady, isAuthenticated, router]);
+
+  if (!authReady || !isAuthenticated) return <ScreenShell><Text style={styles.subtitle}>A verificar a sua conta...</Text></ScreenShell>;
 
   const createSession = async () => {
     setIsLoading(true); setError('');
@@ -476,8 +562,8 @@ export function ConnectSetupScreen() {
     });
   }, [invite]);
 
-  if (mode === 'host' && invite) return <ScreenShell><TopBar title="Host Connect" /><View style={styles.connectInvite}><Text style={styles.title}>Invite someone to connect</Text><Text style={styles.subtitle}>Scan this code or share the pairing code.</Text><QRCode value={invite.qrPayload} size={210} backgroundColor={theme.colors.white} color={theme.colors.primaryText} /><Text style={styles.pairingCode}>{invite.pairingCode}</Text><View style={[styles.sessionStatus, sessionStatus !== 'waiting' && styles.sessionStatusReady]}><Ionicons name={sessionStatus === 'waiting' ? 'time-outline' : 'checkmark-circle-outline'} size={20} color={sessionStatus === 'waiting' ? theme.colors.warning : theme.colors.emeraldDark} /><Text style={styles.sessionStatusText}>{sessionStatus === 'waiting' ? 'Waiting for the Connector...' : 'Connector connected and ready.'}</Text></View>{sessionStatus === 'paired' || sessionStatus === 'ready' ? <PrimaryButton title="Start Conversation" fullWidth onPress={async () => { await connectService.updateStatus(invite.sessionId, 'inviting'); setSessionStatus('inviting'); }} /> : null}<SecondaryButton title="Cancel session" onPress={async () => { await connectService.cancelSession(invite.sessionId); setInvite(null); setMode('choose'); }} /></View></ScreenShell>;
-  if (mode === 'join') return <ScreenShell><TopBar title="Join Connect" /><Text style={styles.title}>Join a conversation</Text><Text style={styles.subtitle}>Enter the code shared by the Host or scan the QR code.</Text><TextInput value={pairingCode} onChangeText={(value) => setPairingCode(value.toUpperCase())} placeholder="XXXX-XXXX" placeholderTextColor={theme.colors.secondaryText} autoCapitalize="characters" style={styles.pairingInput} /><PrimaryButton title={isLoading ? 'Connecting...' : 'Connect'} fullWidth onPress={() => joinSession()} /><SecondaryButton title="Scan QR" onPress={async () => { const permission = cameraPermission?.granted ? cameraPermission : await requestCameraPermission(); if (permission?.granted) setScannerOpen(true); else setError('A câmara é necessária para ler o QR code.'); }} /><Modal visible={scannerOpen} animationType="slide"><CameraView style={styles.scanner} barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={({ data }) => { setScannerOpen(false); try { const payload = JSON.parse(data) as { sessionId?: string; pairingToken?: string }; if (payload.sessionId && payload.pairingToken) void connectService.joinWithQr(payload.sessionId, payload.pairingToken).then(() => router.push('/connect-active')).catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'QR code inválido.')); else setError('QR code inválido.'); } catch { setError('QR code inválido.'); } }} /></Modal>{error ? <Text style={styles.authError}>{error}</Text> : null}</ScreenShell>;
+  if (mode === 'host' && invite) return <ScreenShell><TopBar title="Host Connect" /><View style={styles.connectInvite}><Text style={styles.title}>Invite someone to connect</Text><Text style={styles.subtitle}>Scan this code or share the pairing code.</Text><QRCode value={invite.qrPayload} size={210} backgroundColor={theme.colors.white} color={theme.colors.primaryText} /><Text style={styles.pairingCode}>{invite.pairingCode}</Text><Pressable style={styles.copyCodeButton} onPress={() => void Clipboard.setStringAsync(invite.pairingCode)}><Ionicons name="copy-outline" size={18} color={theme.colors.emeraldDark} /><Text style={styles.copyCodeText}>Copy code</Text></Pressable><View style={[styles.sessionStatus, sessionStatus !== 'waiting' && styles.sessionStatusReady]}><Ionicons name={sessionStatus === 'waiting' ? 'time-outline' : 'checkmark-circle-outline'} size={20} color={sessionStatus === 'waiting' ? theme.colors.warning : theme.colors.emeraldDark} /><Text style={styles.sessionStatusText}>{sessionStatus === 'waiting' ? 'Waiting for the Connector...' : 'Connector connected and ready.'}</Text></View>{sessionStatus === 'paired' || sessionStatus === 'ready' ? <PrimaryButton title="Start Conversation" fullWidth onPress={async () => { await connectService.updateStatus(invite.sessionId, 'active'); setSessionStatus('active'); router.push({ pathname: '/connect-active', params: { sessionId: invite.sessionId } }); }} /> : null}<SecondaryButton title="Cancel session" onPress={async () => { setInvite(null); setMode('choose'); setError(''); try { await connectService.cancelSession(invite.sessionId); } catch { setError('A sessão foi fechada neste dispositivo, mas o servidor não confirmou o cancelamento.'); } }} /></View></ScreenShell>;
+  if (mode === 'join') return <ScreenShell><TopBar title="Join Connect" /><Text style={styles.title}>Join a conversation</Text><Text style={styles.subtitle}>Enter the code shared by the Host or scan the QR code.</Text><TextInput value={pairingCode} maxLength={9} onChangeText={(value) => setPairingCode(value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 9))} placeholder="XXXX-XXXX" placeholderTextColor={theme.colors.secondaryText} autoCapitalize="characters" style={styles.pairingInput} /><PrimaryButton title={isLoading ? 'Connecting...' : 'Connect'} fullWidth onPress={() => joinSession()} /><SecondaryButton title="Scan QR" onPress={async () => { const permission = cameraPermission?.granted ? cameraPermission : await requestCameraPermission(); if (permission?.granted) setScannerOpen(true); else setError('A câmara é necessária para ler o QR code.'); }} /><Modal visible={scannerOpen} animationType="slide"><CameraView style={styles.scanner} barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={({ data }) => { setScannerOpen(false); try { const payload = JSON.parse(data) as { sessionId?: string; pairingToken?: string }; if (payload.sessionId && payload.pairingToken) void connectService.joinWithQr(payload.sessionId, payload.pairingToken).then((joined) => router.push({ pathname: '/connect-active', params: { sessionId: joined.sessionId } })).catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'QR code inválido.')); else setError('QR code inválido.'); } catch { setError('QR code inválido.'); } }} /></Modal>{error ? <Text style={styles.authError}>{error}</Text> : null}</ScreenShell>;
   return (
     <ScreenShell>
       <TopBar title="Connect" />
@@ -499,12 +585,20 @@ export function ConnectActiveScreen() {
   const [isMuted, setIsMuted] = React.useState(false);
   const [speakerEnabled, setSpeakerEnabled] = React.useState(true);
   const [error, setError] = React.useState('');
+  const [liveKitStatus, setLiveKitStatus] = React.useState<LiveKitStatus>('connecting');
+  const [participantCount, setParticipantCount] = React.useState(1);
+  const [messages, setMessages] = React.useState<Array<{ speaker: string; text: string; translatedText: string; sourceLanguage: string; targetLanguage: string }>>([]);
+  const roomRef = React.useRef<import('livekit-client').Room | null>(null);
 
   React.useEffect(() => {
     if (!sessionId) { setError('Sessão inválida.'); setConnectionState('error'); return; }
     let cancelled = false;
-    void Promise.all([connectService.getSession(sessionId), connectService.getLiveKitToken(sessionId)]).then(([details]) => {
-      if (!cancelled) { setSession(details); setConnectionState('connected'); }
+    void Promise.all([connectService.getSession(sessionId), connectService.getLiveKitToken(sessionId)]).then(async ([details, liveKit]) => {
+      if (cancelled) return;
+      setSession(details);
+      const room = await liveKitService.connect(liveKit.serverUrl, liveKit.token, { onStatus: setLiveKitStatus, onParticipant: setParticipantCount, recipientIdentity: user.id });
+      roomRef.current = room;
+      if (!cancelled) setConnectionState('connected');
     }).catch((requestError) => {
       if (!cancelled) { setError(requestError instanceof Error ? requestError.message : 'Não foi possível ligar à conversa.'); setConnectionState('error'); }
     });
@@ -512,7 +606,10 @@ export function ConnectActiveScreen() {
       const status = (payload as { new?: { status_v2?: string } }).new?.status_v2;
       if (status === 'ended' || status === 'declined') router.replace('/connect-complete');
     });
-    return () => { cancelled = true; unsubscribe(); };
+    const unsubscribeMessages = realtimeSessionService.subscribeToSession(sessionId, (event) => {
+      setMessages((current) => [...current, { speaker: event.speakerUserId, text: event.originalTranscript, translatedText: event.translatedText, sourceLanguage: event.sourceLanguage, targetLanguage: event.targetLanguage }]);
+    });
+    return () => { cancelled = true; unsubscribe(); unsubscribeMessages(); if (roomRef.current) liveKitService.disconnect(roomRef.current); };
   }, [sessionId, router]);
 
   const endSession = async () => {
@@ -528,17 +625,14 @@ export function ConnectActiveScreen() {
         <View style={styles.participantCard}><Text style={styles.participantName}>{session?.connectorName ?? 'Connector'}</Text><Text style={styles.participantLanguage}>{languageFlag(session?.connectorLanguage ?? 'Portuguese')} {session?.connectorLanguage ?? 'Portuguese'}</Text></View>
       </View>
       <View style={styles.liveStatus}><View style={[styles.statusDot, connectionState === 'connected' && styles.statusDotLive]} /><Text style={styles.liveStatusText}>{connectionState === 'connecting' ? 'A ligar...' : connectionState === 'connected' ? 'Ligado e pronto' : error}</Text></View>
-      <View style={styles.emptyTimeline}>
-        <Ionicons name="chatbubbles-outline" size={34} color={theme.colors.muted} />
-        <Text style={styles.emptyText}>A conversa traduzida aparecerá aqui.</Text>
-      </View>
+      {messages.length === 0 ? <View style={styles.emptyTimeline}><Ionicons name="chatbubbles-outline" size={34} color={theme.colors.muted} /><Text style={styles.emptyText}>A conversa traduzida aparecerá aqui.</Text></View> : <ScrollView style={styles.timelineCard}>{messages.map((message, index) => <View key={`${message.speaker}-${index}`} style={styles.messageBlock}><Text style={styles.messageHeader}>{message.speaker === user.id ? 'Você' : 'Outro participante'} · {message.sourceLanguage}</Text><Text style={styles.messageText}>{message.text}</Text><Text style={styles.messageTranslation}>{message.targetLanguage}: {message.translatedText}</Text></View>)}</ScrollView>}
       <View style={styles.bottomControls}>
-        <Pressable style={[styles.controlChip, isMuted && styles.controlChipActive]} onPress={() => setIsMuted((value) => !value)}><Ionicons name={isMuted ? 'mic-off' : 'mic'} size={18} color={theme.colors.primaryText} /></Pressable>
+        <Pressable style={[styles.controlChip, isMuted && styles.controlChipActive]} onPress={() => { const next = !isMuted; setIsMuted(next); if (roomRef.current) void liveKitService.setMicrophoneEnabled(roomRef.current, !next); }}><Ionicons name={isMuted ? 'mic-off' : 'mic'} size={18} color={theme.colors.primaryText} /></Pressable>
         <Pressable style={[styles.controlChip, !speakerEnabled && styles.controlChipActive]} onPress={() => setSpeakerEnabled((value) => !value)}><Ionicons name={speakerEnabled ? 'volume-high' : 'volume-mute'} size={18} color={theme.colors.primaryText} /></Pressable>
         <Pressable style={styles.controlChip}><Ionicons name="settings" size={18} color={theme.colors.primaryText} /></Pressable>
         <Pressable style={styles.controlChipEnd} onPress={endSession}><Ionicons name="call" size={18} color={theme.colors.white} /></Pressable>
       </View>
-      <Text style={styles.remainingText}>Connect Minutes: server-authoritative</Text>
+      <Text style={styles.remainingText}>{liveKitStatus === 'reconnecting' ? 'Reconnecting...' : `${participantCount} participant${participantCount === 1 ? '' : 's'} connected`}</Text>
     </ScreenShell>
   );
 }
@@ -549,10 +643,8 @@ export function ConnectCompleteScreen() {
     <ScreenShell>
       <View style={styles.completionCard}>
         <Text style={styles.title}>Conversation complete</Text>
-        <Text style={styles.subtitle}>Duration: 18:42</Text>
-        <Text style={styles.subtitle}>Languages: English → Portuguese</Text>
-        <Text style={styles.subtitle}>Messages translated: 12</Text>
-        <Text style={styles.subtitle}>Minutes used: 2</Text>
+        <Text style={styles.subtitle}>A conversa foi encerrada.</Text>
+        <Text style={styles.subtitle}>Os dados disponíveis serão mantidos no histórico.</Text>
       </View>
       <View style={styles.buttonStack}>
         <PrimaryButton title="View Conversation" onPress={() => router.push('/history')} fullWidth />
@@ -631,8 +723,7 @@ export function ProfileScreen() {
     <ScreenShell>
       <ScrollView contentContainerStyle={styles.profileScroll} showsVerticalScrollIndicator={false}>
         <View style={styles.profileHeader}>
-          <Image source={require('../assets/muwoyo-brand.png')} style={styles.profileLogo} resizeMode="contain" />
-          <View style={styles.avatarLarge}><Image source={require('../assets/muwoyo-brand.png')} style={styles.avatarLogo} resizeMode="contain" /></View>
+          <View style={styles.avatarLarge}><Text style={styles.avatarLetter}>{user.avatar}</Text></View>
           <Text style={styles.title}>{user.name}</Text>
           <Text style={styles.subtitle}>{user.email}</Text>
           <Text style={styles.planTag}>{selectedPlanId.toUpperCase()}</Text>
@@ -652,8 +743,8 @@ export function ProfileScreen() {
 
 export function UsageScreen() {
   const { balances } = useAppStore();
-  const totalTranslation = 75;
-  const totalConnect = 25;
+  const totalTranslation = Math.max(balances.translationTotal, balances.translationRemaining);
+  const totalConnect = Math.max(balances.connectTotal, balances.connectRemaining);
   return (
     <ScreenShell>
       <TopBar title="Usage" />
@@ -661,12 +752,12 @@ export function UsageScreen() {
       <View style={styles.usageCard}>
         <Text style={styles.usageLabel}>Translation</Text>
         <Text style={styles.usageValue}>{balances.translationRemaining} / {totalTranslation} minutes</Text>
-        <View style={styles.progressBar}><View style={[styles.progressFill, { width: `${(balances.translationRemaining / totalTranslation) * 100}%` }]} /></View>
+        <View style={styles.progressBar}><View style={[styles.progressFill, { width: `${totalTranslation ? (balances.translationRemaining / totalTranslation) * 100 : 0}%` }]} /></View>
       </View>
       <View style={styles.usageCard}>
         <Text style={styles.usageLabel}>Connect</Text>
         <Text style={styles.usageValue}>{balances.connectRemaining} / {totalConnect} minutes</Text>
-        <View style={styles.progressBar}><View style={[styles.progressFill, { width: `${(balances.connectRemaining / totalConnect) * 100}%` }]} /></View>
+        <View style={styles.progressBar}><View style={[styles.progressFill, { width: `${totalConnect ? (balances.connectRemaining / totalConnect) * 100 : 0}%` }]} /></View>
       </View>
       <Text style={styles.subtitle}>Resets October 2</Text>
     </ScreenShell>
@@ -812,9 +903,10 @@ const styles = StyleSheet.create({
   primaryButton: { backgroundColor: theme.colors.emerald, paddingVertical: 16, borderRadius: 18, alignItems: 'center', justifyContent: 'center', minHeight: 52 },
   primaryButtonText: { color: '#082018', fontSize: 16, fontWeight: '700' },
   authButton: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, paddingVertical: 14, borderRadius: 18, alignItems: 'center', justifyContent: 'center', minHeight: 52, flexDirection: 'row', gap: 10 },
-  authButtonDark: { backgroundColor: '#14231C', borderColor: '#14231C' },
+  authButtonApple: { backgroundColor: '#111111', borderColor: '#111111' },
+  authButtonEmail: { backgroundColor: theme.colors.emeraldDark, borderColor: theme.colors.emeraldDark },
   authButtonText: { color: theme.colors.primaryText, fontSize: 16, fontWeight: '700' },
-  authButtonTextDark: { color: theme.colors.white },
+  authButtonTextLight: { color: theme.colors.white },
   authInput: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 16, minHeight: 52, paddingHorizontal: 16, color: theme.colors.primaryText, fontSize: 16 },
   authError: { color: theme.colors.error, textAlign: 'center', fontSize: 13 },
   authLogo: { width: 180, height: 180, alignSelf: 'center', marginTop: 10, marginBottom: 12 },
@@ -844,6 +936,17 @@ const styles = StyleSheet.create({
   fullWidth: { width: '100%' },
   buttonStack: { gap: 12, marginTop: 26 },
   heroBlock: { marginTop: 48 },
+  loginHero: { marginTop: 42, alignItems: 'center' },
+  loginBrandBadge: { width: 92, height: 92, borderRadius: 30, backgroundColor: theme.colors.elevated, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  loginEyebrow: { color: theme.colors.emeraldDark, fontSize: 12, fontWeight: '800', letterSpacing: 2 },
+  loginTitle: { color: theme.colors.primaryText, fontSize: 30, lineHeight: 36, fontWeight: '800', textAlign: 'center', marginTop: 10 },
+  loginForm: { gap: 12, marginTop: 26 },
+  authDivider: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 4 },
+  authDividerLine: { flex: 1, height: 1, backgroundColor: theme.colors.border },
+  authDividerText: { color: theme.colors.secondaryText, fontSize: 12 },
+  createAccountLink: { alignItems: 'center', paddingVertical: 8 },
+  createAccountText: { color: theme.colors.secondaryText, fontSize: 14 },
+  createAccountAccent: { color: theme.colors.emeraldDark, fontWeight: '800' },
   onboardingCard: { backgroundColor: theme.colors.surface, borderRadius: 24, padding: 28, borderWidth: 1, borderColor: theme.colors.border, marginTop: 36 },
   onboardingLogo: { width: 220, height: 220, alignSelf: 'center', marginBottom: 20 },
   onboardingTitle: { fontSize: 30, lineHeight: 38, color: theme.colors.primaryText, fontWeight: '700' },
@@ -883,6 +986,7 @@ const styles = StyleSheet.create({
   smallCircle: { width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surface, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.colors.border },
   detectedTag: { marginTop: 12, color: theme.colors.emerald, textAlign: 'center', fontWeight: '600' },
   searchBox: { marginVertical: 12, borderRadius: 18, paddingVertical: 12, paddingHorizontal: 14, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  searchInput: { flex: 1, color: theme.colors.primaryText, fontSize: 16, paddingVertical: 0 },
   searchText: { color: theme.colors.secondaryText },
   sectionTitle: { fontSize: 16, color: theme.colors.primaryText, marginBottom: 12, fontWeight: '700' },
   languageRow: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.border, flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -898,11 +1002,15 @@ const styles = StyleSheet.create({
   label: { marginTop: 18, color: theme.colors.primaryText, fontSize: 15, fontWeight: '600' },
   selectorBox: { marginTop: 10, backgroundColor: theme.colors.surface, borderRadius: 18, padding: 18, borderWidth: 1, borderColor: theme.colors.border },
   selectorValue: { color: theme.colors.primaryText, fontSize: 16 },
-  voiceDirections: { flexDirection: 'row', gap: 12, marginTop: 26 },
+  singleVoiceDirection: { minHeight: 170, borderRadius: 24, backgroundColor: theme.colors.emeraldDeep, marginTop: 26, padding: 22, justifyContent: 'center', alignItems: 'center', gap: 8 },
   voiceDirection: { flex: 1, minHeight: 150, borderRadius: 20, backgroundColor: theme.colors.emerald, padding: 18, justifyContent: 'center', alignItems: 'center', gap: 7 },
   voiceDirectionSecondary: { backgroundColor: theme.colors.elevated, borderWidth: 1, borderColor: theme.colors.border },
   voiceDirectionLabel: { color: theme.colors.primaryText, fontSize: 15, fontWeight: '800', textAlign: 'center' },
   voiceDirectionHint: { color: theme.colors.secondaryText, fontSize: 12, textAlign: 'center' },
+  voiceState: { alignItems: 'center', justifyContent: 'center', minHeight: 70, marginBottom: 12 },
+  voiceStateText: { color: theme.colors.primaryText, fontWeight: '700', fontSize: 16 },
+  waveform: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 40, marginTop: 8 },
+  waveBar: { width: 5, borderRadius: 3, backgroundColor: theme.colors.emerald },
   textLanguageRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
   textLanguageSelector: { flex: 1, minHeight: 54, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 16, backgroundColor: theme.colors.surface, justifyContent: 'center', paddingHorizontal: 12 },
   translationInputCard: { position: 'relative' },
@@ -916,6 +1024,8 @@ const styles = StyleSheet.create({
   roleText: { color: theme.colors.secondaryText, lineHeight: 20, marginBottom: 8 },
   connectInvite: { alignItems: 'center', gap: 14, paddingTop: 18 },
   pairingCode: { color: theme.colors.primaryText, fontSize: 28, fontWeight: '800', letterSpacing: 3 },
+  copyCodeButton: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 14, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: theme.colors.surface },
+  copyCodeText: { color: theme.colors.emeraldDark, fontWeight: '800' },
   sessionStatus: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, backgroundColor: '#FFF8E6' },
   sessionStatusReady: { backgroundColor: '#E2F4EA' },
   sessionStatusText: { color: theme.colors.primaryText, fontWeight: '600' },
@@ -933,6 +1043,7 @@ const styles = StyleSheet.create({
   emptyTimeline: { marginTop: 22, minHeight: 180, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface, borderRadius: 18, borderWidth: 1, borderColor: theme.colors.border, padding: 24 },
   emptyText: { color: theme.colors.secondaryText, textAlign: 'center', marginTop: 12, lineHeight: 20 },
   messageHeader: { color: theme.colors.secondaryText },
+  messageBlock: { paddingBottom: 16, marginBottom: 16, borderBottomWidth: 1, borderBottomColor: theme.colors.border },
   messageText: { color: theme.colors.primaryText, marginTop: 4, fontSize: 16 },
   messageTranslation: { color: theme.colors.emerald, marginTop: 8, fontSize: 16 },
   timeStamp: { marginTop: 8, color: theme.colors.secondaryText, fontSize: 12 },

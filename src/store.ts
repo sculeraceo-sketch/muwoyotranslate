@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { plans } from './catalog';
 import { supabase } from './supabase';
 import { TranslationHistoryItem, UserProfile, UserSettings } from './types';
@@ -78,7 +79,10 @@ export const useAppStore = create<AppState>((set) => ({
       userSettings: { ...state.userSettings, autoDetect: value },
     })),
   setAuthState: (value) => set({ isAuthenticated: value, authReady: true }),
-  setOnboardingComplete: (value) => set({ onboardingComplete: value }),
+  setOnboardingComplete: (value) => {
+    set({ onboardingComplete: value });
+    void AsyncStorage.setItem('muwoyo.onboardingComplete', value ? 'true' : 'false');
+  },
   setTheme: (value) =>
     set((state) => ({
       theme: value,
@@ -88,7 +92,20 @@ export const useAppStore = create<AppState>((set) => ({
   addHistoryItem: (item) => set((state) => ({ history: [item, ...state.history] })),
   saveTranslation: async (item) => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      const localItem: TranslationHistoryItem = {
+        ...item,
+        id: `local-${Date.now()}`,
+        date: new Date().toLocaleDateString(),
+        duration: '0 min',
+      };
+      const stored = await AsyncStorage.getItem('muwoyo.localHistory');
+      const localHistory = stored ? JSON.parse(stored) as TranslationHistoryItem[] : [];
+      const nextHistory = [localItem, ...localHistory].slice(0, 100);
+      await AsyncStorage.setItem('muwoyo.localHistory', JSON.stringify(nextHistory));
+      set((state) => ({ history: [localItem, ...state.history.filter((entry) => entry.id !== localItem.id)] }));
+      return;
+    }
     await supabase.from('translations').insert({
       user_id: user.id,
       source_language: item.sourceLanguage,
@@ -111,9 +128,12 @@ export const useAppStore = create<AppState>((set) => ({
       },
     })),
   hydrateSession: async () => {
+    const onboardingComplete = (await AsyncStorage.getItem('muwoyo.onboardingComplete')) === 'true';
+    const localHistoryJson = await AsyncStorage.getItem('muwoyo.localHistory');
+    const localHistory = localHistoryJson ? JSON.parse(localHistoryJson) as TranslationHistoryItem[] : [];
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.user) {
-      set({ isAuthenticated: false, authReady: true });
+      set({ onboardingComplete, history: localHistory, isAuthenticated: false, authReady: true });
       return;
     }
     const userId = session.user.id;
@@ -126,6 +146,7 @@ export const useAppStore = create<AppState>((set) => ({
     ]);
     const planId = subscription?.plan_id ?? profile?.plan_id ?? 'free';
     set({
+      onboardingComplete,
       isAuthenticated: true,
       authReady: true,
       user: {

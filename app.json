@@ -13,7 +13,8 @@
     "icon": "./assets/muwoyo-brand.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.MUWOYOTRANSLATE"
     },
     "android": {
       "adaptiveIcon": {
@@ -21,11 +22,22 @@
         "foregroundImage": "./assets/muwoyo-brand.png",
         "monochromeImage": "./assets/muwoyo-brand.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ],
+      "package": "com.anonymous.MUWOYOTRANSLATE"
     },
     "plugins": [
       "expo-router",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-audio",
+      "expo-speech-recognition",
+      "expo-sharing",
+      "@livekit/react-native-expo-plugin"
     ]
   }
 }
